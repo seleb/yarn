@@ -575,12 +575,25 @@ export class Install {
         // use json `resolution` version
         version = resolutionVersion;
       } else {
-        version = await this.reporter.select(
-          this.reporter.lang('manualVersionResolution', name),
-          this.reporter.lang('answer'),
-          options,
-        );
-        this.resolutions[name] = version;
+        let autoresolve = true;
+        version = versions[0];
+        for (const conflictedVersion of versions) {
+          if (version !== conflictedVersion) {
+            autoresolve = false;
+            break;
+          }
+        }
+        console.log('Conflicts detected: ', versions);
+        if (autoresolve) {
+          console.log('Autoresolved to ', version);
+        } else {
+          version = await this.reporter.select(
+            this.reporter.lang('manualVersionResolution', name),
+            this.reporter.lang('answer'),
+            options,
+          );
+          this.resolutions[name] = version;
+        }
       }
 
       flattenedPatterns.push(this.resolver.collapseAllVersionsOfPackage(name, version));
