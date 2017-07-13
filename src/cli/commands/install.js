@@ -557,16 +557,6 @@ export class Install {
         continue;
       }
 
-      const options = infos.map((info): ReporterSelectOption => {
-        const ref = info._reference;
-        invariant(ref, 'expected reference');
-        return {
-          // TODO `and is required by {PARENT}`,
-          name: this.reporter.lang('manualVersionResolutionOption', ref.patterns.join(', '), info.version),
-
-          value: info.version,
-        };
-      });
       const versions = infos.map((info): string => info.version);
       let version: ?string;
 
@@ -583,10 +573,22 @@ export class Install {
             break;
           }
         }
-        console.log('Conflicts detected: ', versions);
+        console.log('infos', infos);
+        console.log(`Conflicts detected in ${name}: ${versions}`);
         if (autoresolve) {
-          console.log('Autoresolved to ', version);
+          console.log(`Autoresolved to ${version}`);
         } else {
+          const options = infos.map((info): ReporterSelectOption => {
+            const ref = info._reference;
+            invariant(ref, 'expected reference');
+            return {
+              // TODO `and is required by {PARENT}`,
+              name: this.reporter.lang('manualVersionResolutionOption', ref.patterns.join(', '), info.version),
+
+              value: info.version,
+            };
+          });
+
           version = await this.reporter.select(
             this.reporter.lang('manualVersionResolution', name),
             this.reporter.lang('answer'),
