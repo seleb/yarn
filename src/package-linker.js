@@ -87,7 +87,13 @@ export default class PackageLinker {
     // link up `bin scripts` in `dependencies`
     for (const pattern of ref.dependencies) {
       const dep = this.resolver.getStrictResolvedPattern(pattern);
-      if (dep.bin && Object.keys(dep.bin).length) {
+      if (
+        // Missing location means not installed inside node_modules
+        dep._reference &&
+        dep._reference.location &&
+        dep.bin &&
+        Object.keys(dep.bin).length
+      ) {
         deps.push({
           dep,
           loc: this.config.generateHardModulePath(dep._reference),
@@ -99,11 +105,18 @@ export default class PackageLinker {
     if (pkg.bundleDependencies) {
       for (const depName of pkg.bundleDependencies) {
         const loc = path.join(this.config.generateHardModulePath(ref), this.config.getFolder(pkg), depName);
+        try {
+          const dep = await this.config.readManifest(loc, remote.registry);
 
-        const dep = await this.config.readManifest(loc, remote.registry);
-
-        if (dep.bin && Object.keys(dep.bin).length) {
-          deps.push({dep, loc});
+          if (dep.bin && Object.keys(dep.bin).length) {
+            deps.push({dep, loc});
+          }
+        } catch (ex) {
+          if (ex.code !== 'ENOENT') {
+            throw ex;
+          }
+          // intentionally ignoring ENOENT error.
+          // bundledDependency either does not exist or does not contain a package.json
         }
       }
     }
@@ -119,19 +132,18 @@ export default class PackageLinker {
     }
   }
 
-  getFlatHoistedTree(patterns: Array<string>): Promise<HoistManifestTuples> {
-    const hoister = new PackageHoister(this.config, this.resolver);
+  getFlatHoistedTree(patterns: Array<string>, {ignoreOptional}: {ignoreOptional: ?boolean} = {}): HoistManifestTuples {
+    const hoister = new PackageHoister(this.config, this.resolver, {ignoreOptional});
     hoister.seed(patterns);
-    return Promise.resolve(hoister.init());
+    return hoister.init();
   }
 
   async copyModules(
     patterns: Array<string>,
-    linkDuplicates: boolean,
     workspaceLayout?: WorkspaceLayout,
+    {linkDuplicates, ignoreOptional}: {linkDuplicates: ?boolean, ignoreOptional: ?boolean} = {},
   ): Promise<void> {
-    let flatTree = await this.getFlatHoistedTree(patterns);
-
+    let flatTree = this.getFlatHoistedTree(patterns, {ignoreOptional});
     // sorted tree makes file creation and copying not to interfere with each other
     flatTree = flatTree.sort(function(dep1, dep2): number {
       return dep1[0].localeCompare(dep2[0]);
@@ -377,6 +389,10 @@ export default class PackageLinker {
         linkBinConcurrency,
       );
     }
+
+    for (const [, {pkg}] of flatTree) {
+      await this._warnForMissingBundledDependencies(pkg);
+    }
   }
 
   determineTopLevelBinLinks(flatTree: HoistManifestTuples): Array<[string, Manifest]> {
@@ -388,6 +404,7 @@ export default class PackageLinker {
         linksToCreate.set(name, [dest, pkg]);
       }
     }
+
     return Array.from(linksToCreate.values());
   }
 
@@ -429,8 +446,26 @@ export default class PackageLinker {
     return range === '*' || satisfiesWithPreleases(version, range, this.config.looseSemver);
   }
 
-  async init(patterns: Array<string>, linkDuplicates: boolean, workspaceLayout?: WorkspaceLayout): Promise<void> {
+  async _warnForMissingBundledDependencies(pkg: Manifest): Promise<void> {
+    const ref = pkg._reference;
+
+    if (pkg.bundleDependencies) {
+      for (const depName of pkg.bundleDependencies) {
+        const loc = path.join(this.config.generateHardModulePath(ref), this.config.getFolder(pkg), depName);
+        if (!await fs.exists(loc)) {
+          const pkgHuman = `${pkg.name}@${pkg.version}`;
+          this.reporter.warn(this.reporter.lang('missingBundledDependency', pkgHuman, depName));
+        }
+      }
+    }
+  }
+
+  async init(
+    patterns: Array<string>,
+    workspaceLayout?: WorkspaceLayout,
+    {linkDuplicates, ignoreOptional}: {linkDuplicates: ?boolean, ignoreOptional: ?boolean} = {},
+  ): Promise<void> {
     this.resolvePeerModules();
-    await this.copyModules(patterns, linkDuplicates, workspaceLayout);
+    await this.copyModules(patterns, workspaceLayout, {linkDuplicates, ignoreOptional});
   }
 }
